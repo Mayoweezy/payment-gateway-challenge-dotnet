@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Integration.Tests.Resilience;
 
@@ -45,7 +45,7 @@ public sealed class BankResilienceTests : IDisposable
 
         for (var i = 0; i < 5; i++)
         {
-            Assert.IsType<BankResult.Failed>(await bank.AuthorizeAsync(ValidRequest()));
+            Assert.IsType<BankResult.Refused>(await bank.AuthorizeAsync(ValidRequest()));
         }
 
         Assert.Equal(5, handler.CallCount);
@@ -138,15 +138,7 @@ public sealed class BankResilienceTests : IDisposable
         return _provider.GetRequiredService<IBankClient>();
     }
 
-    private static PostPaymentRequest ValidRequest() => new()
-    {
-        CardNumber = "2222405343248877",
-        ExpiryMonth = 4,
-        ExpiryYear = 2027,
-        Currency = "GBP",
-        Amount = 100,
-        Cvv = "123"
-    };
+    private static CardPayment ValidRequest() => new("2222405343248877", 4, 2027, "GBP", 100, "123");
 
     public void Dispose() => _provider?.Dispose();
 }

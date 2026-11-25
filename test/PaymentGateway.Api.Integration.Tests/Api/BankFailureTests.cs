@@ -1,6 +1,7 @@
 using System.Net;
 
 using PaymentGateway.Api.Bank;
+using PaymentGateway.Api.Controllers;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
 
 namespace PaymentGateway.Api.Integration.Tests.Api;
@@ -17,6 +18,19 @@ public class BankFailureTests : ApiTestBase
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         AssertIsProblemDetails(response);
         Assert.NotNull(response.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task A_bank_refusal_returns_502_saying_the_payment_was_not_processed()
+    {
+        GivenBankReturns(new BankResult.Refused(400));
+
+        var response = await PostPaymentAsync(ValidBody());
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        AssertIsProblemDetails(response);
+        Assert.Null(response.Headers.RetryAfter);
+        Assert.Equal(PaymentProblems.Types.BankRefused, (await ReadJsonAsync(response)).GetProperty("type").GetString());
     }
 
     [Fact]

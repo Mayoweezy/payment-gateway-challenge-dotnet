@@ -25,7 +25,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, AuthorizedJson);
 
-        await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, request.Method);
@@ -47,11 +47,7 @@ public class BankClientTests
     public async Task Formats_the_expiry_date_as_two_digit_month_and_four_digit_year(int month, int year, string expected)
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, AuthorizedJson);
-        var paymentRequest = TestData.ValidRequest();
-        paymentRequest.ExpiryMonth = month;
-        paymentRequest.ExpiryYear = year;
-
-        await CreateClient(handler).AuthorizeAsync(paymentRequest);
+        await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment(month, year));
 
         using var body = JsonDocument.Parse(Assert.Single(handler.Requests).Body!);
         Assert.Equal(expected, body.RootElement.GetProperty("expiry_date").GetString());
@@ -64,7 +60,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, AuthorizedJson);
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         var authorized = Assert.IsType<BankResult.Authorized>(result);
         Assert.Equal("0bb07405-6d44-4b50-a14f-7ae0beff13ad", authorized.AuthorizationCode);
@@ -75,7 +71,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, DeclinedJson);
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Declined>(result);
     }
@@ -85,7 +81,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.ServiceUnavailable, "{}");
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Unavailable>(result);
     }
@@ -93,13 +89,24 @@ public class BankClientTests
     [Theory]
     [InlineData(HttpStatusCode.BadRequest)]
     [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task A_4xx_means_the_bank_refused_the_payment_without_processing_it(HttpStatusCode statusCode)
+    {
+        var handler = StubHttpMessageHandler.Returning(statusCode, """{"error_message":"Not all required properties were sent in the request"}""");
+
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
+
+        Assert.Equal((int)statusCode, Assert.IsType<BankResult.Refused>(result).StatusCode);
+    }
+
+    [Theory]
     [InlineData(HttpStatusCode.InternalServerError)]
     [InlineData(HttpStatusCode.BadGateway)]
     public async Task Any_other_error_status_is_a_failure(HttpStatusCode statusCode)
     {
         var handler = StubHttpMessageHandler.Returning(statusCode, """{"error_message":"boom"}""");
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Failed>(result);
     }
@@ -115,7 +122,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, json);
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Failed>(result);
     }
@@ -134,7 +141,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Throwing(exception);
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Timeout>(result);
     }
@@ -144,7 +151,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Throwing(new BrokenCircuitException());
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Unavailable>(result);
     }
@@ -157,7 +164,7 @@ public class BankClientTests
         // The request never reached the bank, so it definitely was not processed and is safe to retry.
         var handler = StubHttpMessageHandler.Throwing(new HttpRequestException(error, "connection refused"));
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Unavailable>(result);
     }
@@ -167,7 +174,7 @@ public class BankClientTests
     {
         var handler = StubHttpMessageHandler.Throwing(new HttpRequestException("connection reset"));
 
-        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidRequest());
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 
         Assert.IsType<BankResult.Failed>(result);
     }
@@ -183,7 +190,7 @@ public class BankClientTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            CreateClient(handler).AuthorizeAsync(TestData.ValidRequest(), cancellation.Token));
+            CreateClient(handler).AuthorizeAsync(TestData.ValidPayment(), cancellation.Token));
     }
 
     [Fact]
@@ -193,7 +200,7 @@ public class BankClientTests
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.InternalServerError, "{}");
         var client = new BankClient(new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") }, logger);
 
-        await client.AuthorizeAsync(TestData.ValidRequest());
+        await client.AuthorizeAsync(TestData.ValidPayment());
 
         Assert.All(logger.Collector.GetSnapshot(), record =>
         {

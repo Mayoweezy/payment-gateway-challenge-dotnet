@@ -5,7 +5,7 @@ using NSubstitute;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Integration.Tests.Api;
 
@@ -68,7 +68,7 @@ public class ProcessPaymentTests : ApiTestBase
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         await Bank.Received(1).AuthorizeAsync(
-            Arg.Is<PostPaymentRequest>(r => r.CardNumber == CardNumber && r.Cvv == Cvv && r.Amount == 100),
+            Arg.Is<CardPayment>(r => r.CardNumber == CardNumber && r.Cvv == Cvv && r.Amount == 100),
             Arg.Any<CancellationToken>());
     }
 }

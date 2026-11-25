@@ -18,12 +18,19 @@ public static class PaymentProblems
     /// </summary>
     public const string PaymentStatusField = "paymentStatus";
 
+    /// <summary>
+    /// Not a <see cref="PaymentStatus"/> value, because a rejected payment is never created or stored, and keeping it
+    /// out of the enum keeps it out of the payment schema in Swagger.
+    /// </summary>
+    public const string RejectedPaymentStatus = "Rejected";
+
     public static class Types
     {
         private const string Prefix = "urn:payment-gateway:problem:";
 
         public const string Rejected = Prefix + "payment-rejected";
         public const string BankUnavailable = Prefix + "bank-unavailable";
+        public const string BankRefused = Prefix + "bank-refused";
         public const string BankTimeout = Prefix + "bank-timeout";
         public const string BankFailed = Prefix + "bank-failed";
     }
@@ -52,7 +59,7 @@ public static class PaymentProblems
             title: "The payment was rejected because the request is invalid.",
             type: Types.Rejected,
             detail: "The bank was not contacted. Correct the listed fields and try again.");
-        problem.Extensions[PaymentStatusField] = nameof(PaymentStatus.Rejected);
+        problem.Extensions[PaymentStatusField] = RejectedPaymentStatus;
 
         return ToResult(problem);
     }

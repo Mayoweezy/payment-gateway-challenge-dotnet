@@ -1,10 +1,10 @@
-using System.Net.Http.Json;
+using System.Net;
 
 using NSubstitute;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Integration.Tests.Api;
 
@@ -15,46 +15,17 @@ namespace PaymentGateway.Api.Integration.Tests.Api;
 public class ClientDisconnectTests : ApiTestBase
 {
     [Fact]
-    public async Task A_merchant_disconnecting_does_not_cancel_the_bank_call()
+    public async Task The_bank_call_is_not_tied_to_the_merchants_connection()
     {
-        var bankCalled = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var bankAnswer = new TaskCompletionSource<BankResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                bankCalled.TrySetResult(call.Arg<CancellationToken>());
-                return bankAnswer.Task;
-            });
+        // A token that cannot be cancelled cannot be cancelled by a disconnect either. Asserting this directly is
+        // deterministic, unlike dropping a connection and waiting for the abort to reach the server.
+        CancellationToken tokenSeenByBank = default;
+        Bank.AuthorizeAsync(Arg.Any<CardPayment>(), Arg.Do<CancellationToken>(token => tokenSeenByBank = token))
+            .Returns(new BankResult.Authorized("auth-code"));
 
-        using var merchantConnection = new CancellationTokenSource();
-        var request = new HttpRequestMessage(HttpMethod.Post, PaymentsPath) { Content = JsonContent.Create(ValidBody()) };
-        var sending = Client.SendAsync(request, merchantConnection.Token);
+        var response = await PostPaymentAsync(ValidBody());
 
-        bool bankCallCancelled;
-        try
-        {
-            var tokenSeenByBank = await bankCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            merchantConnection.Cancel();
-
-            // The test server aborts the request asynchronously, so give it a moment to propagate.
-            await Task.Delay(TimeSpan.FromMilliseconds(200));
-            bankCallCancelled = tokenSeenByBank.IsCancellationRequested;
-        }
-        finally
-        {
-            // Always let the server-side request finish, so the test cannot hang.
-            bankAnswer.TrySetResult(new BankResult.Authorized("auth-code"));
-        }
-
-        // The merchant's side ends either way (cancelled, or a response nobody reads). Only the bank's token matters.
-        try
-        {
-            await sending.WaitAsync(TimeSpan.FromSeconds(5));
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        Assert.False(bankCallCancelled, "The merchant disconnecting cancelled the bank call.");
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.False(tokenSeenByBank.CanBeCanceled, "The bank call can be cancelled by the merchant's request.");
     }
 }

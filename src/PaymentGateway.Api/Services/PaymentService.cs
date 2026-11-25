@@ -40,15 +40,18 @@ public sealed class PaymentService : IPaymentService
             return new PaymentResult.Rejected(errors);
         }
 
+        var payment = CardPayment.FromValidRequest(request);
+
         // Not cancellable by the merchant: the bank may authorize the payment even if the merchant disconnects,
         // and the gateway must still record it. The bank client's own timeout bounds the call.
-        var bankResult = await _bankClient.AuthorizeAsync(request, CancellationToken.None);
+        var bankResult = await _bankClient.AuthorizeAsync(payment, CancellationToken.None);
 
         return bankResult switch
         {
-            BankResult.Authorized authorized => Store(request, PaymentStatus.Authorized, authorized.AuthorizationCode),
-            BankResult.Declined => Store(request, PaymentStatus.Declined, authorizationCode: null),
+            BankResult.Authorized authorized => Store(payment, PaymentStatus.Authorized, authorized.AuthorizationCode),
+            BankResult.Declined => Store(payment, PaymentStatus.Declined, authorizationCode: null),
             BankResult.Unavailable => BankUnavailable(),
+            BankResult.Refused refused => BankRefused(refused.StatusCode),
             BankResult.Timeout => OutcomeUnknown(new PaymentResult.BankTimeout(), "the bank timed out"),
             BankResult.Failed failed => OutcomeUnknown(new PaymentResult.BankFailed(), failed.Reason),
             _ => throw new InvalidOperationException($"Unhandled bank result {bankResult.GetType().Name}.")
@@ -68,16 +71,16 @@ public sealed class PaymentService : IPaymentService
             .ToDictionary(g => g.Key, g => g.Select(f => f.ErrorMessage).Distinct().ToArray());
     }
 
-    private PaymentResult Store(PostPaymentRequest request, PaymentStatus status, string? authorizationCode)
+    private PaymentResult Store(CardPayment cardPayment, PaymentStatus status, string? authorizationCode)
     {
         var payment = new Payment(
             Guid.NewGuid(),
             status,
-            request.CardNumber![^4..],
-            request.ExpiryMonth!.Value,
-            request.ExpiryYear!.Value,
-            request.Currency!,
-            request.Amount!.Value,
+            cardPayment.CardNumberLastFour,
+            cardPayment.ExpiryMonth,
+            cardPayment.ExpiryYear,
+            cardPayment.Currency,
+            cardPayment.Amount,
             authorizationCode);
 
         _paymentsRepository.Add(payment);
@@ -90,6 +93,13 @@ public sealed class PaymentService : IPaymentService
     {
         _logger.LogWarning("Payment not processed because the bank is unavailable");
         return new PaymentResult.BankUnavailable();
+    }
+
+    private PaymentResult BankRefused(int statusCode)
+    {
+        // Validation should stop anything the bank would refuse, so this points to a gateway bug.
+        _logger.LogError("Payment not processed because the bank refused the request with status {StatusCode}", statusCode);
+        return new PaymentResult.BankRefused();
     }
 
     private PaymentResult OutcomeUnknown(PaymentResult result, string reason)

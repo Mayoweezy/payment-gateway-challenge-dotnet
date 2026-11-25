@@ -4,7 +4,7 @@ using System.Text.Json;
 
 using PaymentGateway.Api.Bank.Requests;
 using PaymentGateway.Api.Bank.Responses;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 using Polly.CircuitBreaker;
 using Polly.Timeout;
@@ -28,12 +28,12 @@ public sealed class BankClient : IBankClient
         _logger = logger;
     }
 
-    public async Task<BankResult> AuthorizeAsync(PostPaymentRequest request, CancellationToken cancellationToken = default)
+    public async Task<BankResult> AuthorizeAsync(CardPayment payment, CancellationToken cancellationToken = default)
     {
         HttpResponseMessage response;
         try
         {
-            response = await _httpClient.PostAsJsonAsync(PaymentsPath, ToBankRequest(request), cancellationToken);
+            response = await _httpClient.PostAsJsonAsync(PaymentsPath, ToBankRequest(payment), cancellationToken);
         }
         catch (BrokenCircuitException)
         {
@@ -79,6 +79,13 @@ public sealed class BankClient : IBankClient
             return new BankResult.Unavailable();
         }
 
+        if ((int)response.StatusCode is >= 400 and < 500)
+        {
+            // The bank refused the request, so it did not process the payment. Validation should prevent this.
+            _logger.LogError("Bank refused the request with status {StatusCode}", (int)response.StatusCode);
+            return new BankResult.Refused((int)response.StatusCode);
+        }
+
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogWarning("Bank returned unexpected status {StatusCode}", (int)response.StatusCode);
@@ -108,12 +115,12 @@ public sealed class BankClient : IBankClient
         }
     }
 
-    private static BankPaymentRequest ToBankRequest(PostPaymentRequest request) => new()
+    private static BankPaymentRequest ToBankRequest(CardPayment payment) => new()
     {
-        CardNumber = request.CardNumber!,
-        ExpiryDate = string.Create(CultureInfo.InvariantCulture, $"{request.ExpiryMonth!.Value:00}/{request.ExpiryYear!.Value:0000}"),
-        Currency = request.Currency!,
-        Amount = request.Amount!.Value,
-        Cvv = request.Cvv!
+        CardNumber = payment.CardNumber,
+        ExpiryDate = string.Create(CultureInfo.InvariantCulture, $"{payment.ExpiryMonth:00}/{payment.ExpiryYear:0000}"),
+        Currency = payment.Currency,
+        Amount = payment.Amount,
+        Cvv = payment.Cvv
     };
 }

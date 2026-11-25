@@ -90,7 +90,7 @@ public class PaymentServiceTests
         await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         await _bank.Received(1).AuthorizeAsync(
-            Arg.Is<PostPaymentRequest>(r =>
+            Arg.Is<CardPayment>(r =>
                 r.CardNumber == TestData.CardNumber &&
                 r.ExpiryMonth == 4 &&
                 r.ExpiryYear == 2027 &&
@@ -109,7 +109,7 @@ public class PaymentServiceTests
         Assert.NotEqual(
             Assert.IsType<PaymentResult.Processed>(first).Payment.Id,
             Assert.IsType<PaymentResult.Processed>(second).Payment.Id);
-        await _bank.Received(2).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
+        await _bank.Received(2).AuthorizeAsync(Arg.Any<CardPayment>(), Arg.Any<CancellationToken>());
     }
 
     // Rejecting
@@ -134,6 +134,7 @@ public class PaymentServiceTests
     public static TheoryData<BankResult, Type> BankFailures => new()
     {
         { new BankResult.Unavailable(), typeof(PaymentResult.BankUnavailable) },
+        { new BankResult.Refused(400), typeof(PaymentResult.BankRefused) },
         { new BankResult.Timeout(), typeof(PaymentResult.BankTimeout) },
         { new BankResult.Failed("unexpected status 500"), typeof(PaymentResult.BankFailed) }
     };
@@ -165,6 +166,7 @@ public class PaymentServiceTests
     public static TheoryData<BankResult> BankFailureResults => new()
     {
         new BankResult.Unavailable(),
+        new BankResult.Refused(400),
         new BankResult.Timeout(),
         new BankResult.Failed("unexpected status 500")
     };
@@ -210,12 +212,12 @@ public class PaymentServiceTests
         await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         await _bank.Received(1).AuthorizeAsync(
-            Arg.Any<PostPaymentRequest>(),
+            Arg.Any<CardPayment>(),
             Arg.Is<CancellationToken>(token => !token.CanBeCanceled));
     }
 
     private void GivenBankReturns(BankResult result) =>
-        _bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>()).Returns(result);
+        _bank.AuthorizeAsync(Arg.Any<CardPayment>(), Arg.Any<CancellationToken>()).Returns(result);
 
     private static void AssertHasErrorFor(PaymentResult.Rejected rejected, string propertyName) =>
         Assert.Contains(rejected.Errors.Keys, key => string.Equals(key, propertyName, StringComparison.OrdinalIgnoreCase));

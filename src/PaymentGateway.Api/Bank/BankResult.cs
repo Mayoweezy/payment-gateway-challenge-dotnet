@@ -9,6 +9,12 @@ public abstract record BankResult
     /// <summary>The bank definitely did not process the payment: it returned 503, or the circuit is open.</summary>
     public sealed record Unavailable : BankResult;
 
+    /// <summary>
+    /// The bank refused the request with a 4xx, so it definitely did not process the payment. Validation should
+    /// prevent this, so it points to a gateway bug or a change in the bank's contract.
+    /// </summary>
+    public sealed record Refused(int StatusCode) : BankResult;
+
     /// <summary>No answer in time. The bank may or may not have processed the payment.</summary>
     public sealed record Timeout : BankResult;
 

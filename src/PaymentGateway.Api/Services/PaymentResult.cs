@@ -16,6 +16,9 @@ public abstract record PaymentResult
     /// <summary>The bank definitely did not process the payment (circuit open or bank returned 503). Safe to retry.</summary>
     public sealed record BankUnavailable : PaymentResult;
 
+    /// <summary>The bank refused the request, so it definitely did not process the payment. A gateway error.</summary>
+    public sealed record BankRefused : PaymentResult;
+
     /// <summary>The bank did not answer in time. The outcome is unknown.</summary>
     public sealed record BankTimeout : PaymentResult;
 

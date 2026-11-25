@@ -5,7 +5,7 @@ using System.Text.Json;
 using NSubstitute;
 
 using PaymentGateway.Api.Bank;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Integration.Tests.TestSupport;
 
@@ -32,7 +32,7 @@ public abstract class ApiTestBase : IDisposable
     protected IBankClient Bank => Factory.Bank;
 
     protected void GivenBankReturns(BankResult result) =>
-        Bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>()).Returns(result);
+        Bank.AuthorizeAsync(Arg.Any<CardPayment>(), Arg.Any<CancellationToken>()).Returns(result);
 
     protected static object ValidBody(string cardNumber = CardNumber, int amount = 100) => new
     {

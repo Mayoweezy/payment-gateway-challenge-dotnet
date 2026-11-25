@@ -23,6 +23,10 @@ internal static class TestData
         Cvv = Cvv
     };
 
+    /// <summary>The validated form of <see cref="ValidRequest"/>, as the bank client receives it.</summary>
+    public static CardPayment ValidPayment(int expiryMonth = 4, int expiryYear = 2027) =>
+        new(CardNumber, expiryMonth, expiryYear, "GBP", 100, Cvv);
+
     public static Payment Payment(PaymentStatus status = PaymentStatus.Authorized) => new(
         Guid.NewGuid(),
         status,

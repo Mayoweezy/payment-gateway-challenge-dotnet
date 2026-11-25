@@ -4,7 +4,7 @@ using NSubstitute;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
-using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Integration.Tests.Api;
 
@@ -14,7 +14,7 @@ public class UnexpectedErrorTests : ApiTestBase
     [Fact]
     public async Task An_unhandled_exception_returns_a_500_problem_without_card_data()
     {
-        Bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>())
+        Bank.AuthorizeAsync(Arg.Any<CardPayment>(), Arg.Any<CancellationToken>())
             .Returns<Task<BankResult>>(_ => throw new InvalidOperationException("unexpected failure"));
 
         var response = await PostPaymentAsync(ValidBody());

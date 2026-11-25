@@ -57,7 +57,8 @@ The tests were written first, against `NotImplementedException` stubs, and then 
 | Invalid request | `400` | Validation problem with `paymentStatus: "Rejected"` |
 | Bank unavailable or circuit open | `503` + `Retry-After: 5` | Problem |
 | Bank timed out | `504` | Problem |
-| Bank call failed | `502` | Problem |
+| Bank refused the request (4xx) | `502` | Problem, payment not processed |
+| Bank call failed | `502` | Problem, outcome unknown |
 | Unexpected server error | `500` | Problem |
 
 ### `GET /api/payments/{id}`
@@ -99,7 +100,7 @@ src/PaymentGateway.Api/
   Bank/Requests, Bank/Responses   the bank's wire format
   Data/          payment repository (the brief's test double)
   Validation/    PostPaymentRequestValidator
-  Models/        Payment, PaymentStatus, API request and response
+  Models/        Payment, CardPayment (a validated request), PaymentStatus, API request and response
 ```
 
 `PaymentService` returns a closed set of `PaymentResult` cases, and the controller maps each to HTTP. Business logic never deals with status codes, and the controller never deals with business rules.
@@ -108,17 +109,19 @@ src/PaymentGateway.Api/
 
 **Card data never leaks.** Only the last four digits are stored. The full card number and CVV are never stored, returned or logged. Validation messages never include the submitted value, and malformed JSON is not echoed back (`AllowInputFormatterExceptionMessages = false`). Tests check responses and logs for card data.
 
-**Rejected is a 400, not a stored payment.** The brief lists `Rejected` as an outcome but not as a stored status, and the bank is never contacted. ProblemDetails reserves `status` for the HTTP code, so the payment status is in a `paymentStatus` field. Malformed JSON gets the same response shape as a failed validation.
+**Rejected is a 400, not a stored payment.** The brief lists `Rejected` as an outcome but not as a stored status, and the bank is never contacted. ProblemDetails reserves `status` for the HTTP code, so the payment status is in a `paymentStatus` field. `Rejected` is deliberately not a `PaymentStatus` value, so the payment schema only ever shows `Authorized` or `Declined`. Malformed JSON gets the same response shape as a failed validation.
 
 **A decline is a `201`.** The payment was created and processed. The bank declining it is a business outcome, not a client error.
 
 **No retries, but a circuit breaker.** The bank has no idempotency support, so retrying after a timeout could charge the shopper twice. The circuit breaker (outer) and timeout (inner, so timeouts count as failures) stop a struggling bank from tying up requests. Bank 400s don't count as failures, because they indicate a bad request, not an unhealthy bank. With the defaults in `appsettings.json`, the circuit opens when at least 10 calls in 30 seconds include 50% failures, and stays open for 15 seconds. Simulator caveat: cards ending in `0` always return 503, so enough of them open the circuit for every card.
 
-**Failures say whether a retry is safe.** When the bank definitely didn't process the payment (it returned 503, the connection was refused, or the circuit is open), the response is a `503` with `Retry-After`. When the outcome is unknown (timeout, a dropped connection, an unexpected response), it's a `504` or `502` with no `Retry-After`. The payment may have gone through, so the merchant must reconcile.
+**Failures say whether a retry is safe.** When the bank definitely didn't process the payment (it returned 503, the connection was refused, or the circuit is open), the response is a `503` with `Retry-After`. When the bank refuses the request with a 4xx, it's a `502` whose `type` is `bank-refused`: the payment wasn't processed, but retrying the same request won't help, because validation should have caught whatever the bank objected to. When the outcome is unknown (timeout, a dropped connection, an unexpected response), it's a `504` or `502` with no `Retry-After`. The payment may have gone through, so the merchant must reconcile.
 
 **A merchant disconnecting doesn't cancel the bank call.** The bank may authorize a payment after the merchant drops the connection, and the gateway must still record it. So the request's cancellation token is deliberately not passed to the bank; the bank call is bounded by its own timeout instead.
 
-**Interfaces at boundaries, real collaborators in tests.** Every service has an interface for consistency and DI. Service tests use the real validator and stores, and mock only the bank. The clock is injected with `TimeProvider`, so expiry rules are tested against a fixed date.
+**Validated input becomes a non-nullable type.** `PostPaymentRequest` has nullable fields so a missing field can be told apart from a zero. Once it passes validation, the service converts it to a `CardPayment` with no nullable fields, so the bank client and storage can't receive an incomplete payment. `CardPayment` is a class rather than a record because a record's generated `ToString()` would print the card number and CVV.
+
+**Interfaces at boundaries, real collaborators in tests.** Every service has an interface for consistency and DI. Service tests use the real validator and repository, and mock only the bank. The clock is injected with `TimeProvider`, so expiry rules are tested against a fixed date.
 
 ## Core brief vs. beyond it
 
