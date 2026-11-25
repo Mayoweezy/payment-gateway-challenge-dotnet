@@ -26,9 +26,6 @@ public static class PaymentProblems
         public const string BankUnavailable = Prefix + "bank-unavailable";
         public const string BankTimeout = Prefix + "bank-timeout";
         public const string BankFailed = Prefix + "bank-failed";
-        public const string IdempotencyKeyMismatch = Prefix + "idempotency-key-mismatch";
-        public const string IdempotencyKeyInProgress = Prefix + "idempotency-key-in-progress";
-        public const string IdempotencyKeyOutcomeUnknown = Prefix + "idempotency-key-outcome-unknown";
     }
 
     public static ObjectResult Rejected(HttpContext httpContext, IReadOnlyDictionary<string, string[]> errors)

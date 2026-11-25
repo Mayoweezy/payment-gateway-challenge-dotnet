@@ -31,7 +31,7 @@ dotnet test test/PaymentGateway.Api.Integration.Tests --filter "Category=Require
 
 | Project | What it covers |
 |---|---|
-| `PaymentGateway.Api.Tests` | Validation rules and boundaries, `PaymentService` orchestration and idempotency, the bank's wire contract and error mapping, and the thread safety of both in-memory stores |
+| `PaymentGateway.Api.Tests` | Validation rules and boundaries, `PaymentService` orchestration, the bank's wire contract and error mapping, and the thread safety of the repository |
 | `PaymentGateway.Api.Integration.Tests` | The real app through `WebApplicationFactory` with a mocked bank: every HTTP status, header and body. The real Polly pipeline over a stub HTTP handler. Smoke tests against the simulator |
 
 The tests were written first, against `NotImplementedException` stubs, and then made to pass.
@@ -51,19 +51,14 @@ The tests were written first, against `NotImplementedException` stubs, and then 
 }
 ```
 
-An optional `Idempotency-Key` header (1 to 255 characters) makes the request safe to repeat.
-
 | Outcome | Status | Body |
 |---|---|---|
 | Authorized or declined | `201` + `Location` | Payment |
-| Replay of a completed key | `201` + `Idempotent-Replayed: true` | Original payment |
 | Invalid request | `400` | Validation problem with `paymentStatus: "Rejected"` |
-| Key reused with different details | `422` | Problem |
-| Key still in progress | `409` + `Retry-After: 1` | Problem |
-| Key locked after an unknown outcome | `409` | Problem |
 | Bank unavailable or circuit open | `503` + `Retry-After: 5` | Problem |
 | Bank timed out | `504` | Problem |
 | Bank call failed | `502` | Problem |
+| Unexpected server error | `500` | Problem |
 
 ### `GET /api/payments/{id}`
 
@@ -83,15 +78,14 @@ A payment looks like this:
 }
 ```
 
-Every error is an RFC 9457 `application/problem+json` body. Each case has its own `type` (for example `urn:payment-gateway:problem:idempotency-key-in-progress`), so clients can branch on it without parsing messages.
+Every error is an RFC 9457 `application/problem+json` body, including unhandled exceptions and route mismatches such as a non-GUID id. Each payment failure has its own `type` (for example `urn:payment-gateway:problem:bank-timeout`), so clients can branch on it without parsing messages.
 
 ## Design
 
 ```
 PaymentsController             HTTP mapping only
-  -> IPaymentService           validation, idempotency, orchestration, logging
+  -> IPaymentService           validation, orchestration, logging
        -> IValidator<PostPaymentRequest>   FluentValidation
-       -> IIdempotencyStore                in-memory
        -> IBankClient                      typed HttpClient
             -> Polly: circuit breaker -> timeout (no retries)
        -> IPaymentsRepository              in-memory
@@ -103,7 +97,7 @@ src/PaymentGateway.Api/
   Services/      IPaymentService, PaymentService, PaymentResult
   Bank/          IBankClient, BankClient, BankResult, options, DI registration
   Bank/Requests, Bank/Responses   the bank's wire format
-  Data/          payment repository and idempotency store
+  Data/          payment repository (the brief's test double)
   Validation/    PostPaymentRequestValidator
   Models/        Payment, PaymentStatus, API request and response
 ```
@@ -122,9 +116,16 @@ src/PaymentGateway.Api/
 
 **Failures say whether a retry is safe.** When the bank definitely didn't process the payment (it returned 503, the connection was refused, or the circuit is open), the response is a `503` with `Retry-After`. When the outcome is unknown (timeout, a dropped connection, an unexpected response), it's a `504` or `502` with no `Retry-After`. The payment may have gone through, so the merchant must reconcile.
 
-**Idempotency is optional and fails safe.** The key is reserved atomically before calling the bank. After an unknown outcome the key stays locked (`409`) rather than allowing a resend. A rejected request, or one the bank definitely didn't process, frees the key. Mismatch returns `422`, following the IETF `Idempotency-Key` draft. A duplicate of a request still in flight returns `409` with `Retry-After`: the client isn't at fault, but must try again later. The fingerprint deliberately excludes the full card number and CVV, because the CVV must not be retained even hashed, and a card number hash is weak protection. A different card with the same last four, expiry, currency and amount is therefore not detected as a mismatch.
+**A merchant disconnecting doesn't cancel the bank call.** The bank may authorize a payment after the merchant drops the connection, and the gateway must still record it. So the request's cancellation token is deliberately not passed to the bank; the bank call is bounded by its own timeout instead.
 
 **Interfaces at boundaries, real collaborators in tests.** Every service has an interface for consistency and DI. Service tests use the real validator and stores, and mock only the bank. The clock is injected with `TimeProvider`, so expiry rules are tested against a fixed date.
+
+## Core brief vs. beyond it
+
+The brief asks for processing (Authorized, Declined, Rejected), retrieval, the listed validation, tests and documented assumptions. Everything else is extra and could be removed without breaking the brief:
+
+- **Beyond the brief:** the circuit breaker and timeout, telling "safe to retry" (`503`) apart from "outcome unknown" (`502`/`504`), and the per-case problem `type`s. I kept them because a payment gateway that retries blindly or hangs on a slow bank is wrong in ways that matter more than the extra code.
+- **Deliberately left out: idempotency keys.** An early version supported an `Idempotency-Key` header, with replay, mismatch detection and a lock after an unknown outcome. It was the most complex part of the code and the brief doesn't ask for it, so I removed it to keep the solution simple. It's the first thing I'd add for production (see below).
 
 ## Assumptions
 
@@ -137,10 +138,10 @@ src/PaymentGateway.Api/
 
 ## Not done, and what production would need
 
-- **Merchant authentication and isolation.** This is the biggest gap: any caller can read any payment, and idempotency keys are global rather than per merchant.
-- **Durable, shared storage** for payments and idempotency keys, with key expiry (for example 24 hours). The current stores are per process.
-- **A reconciliation flow** for unknown outcomes, such as a `Pending` status and a job that queries the bank.
-- **Waiting and replaying.** A duplicate of an in-flight request could wait for the original and replay its result, instead of returning `409`.
+- **Merchant authentication and isolation.** This is the biggest gap: any caller can read any payment.
+- **Idempotency keys**, scoped per merchant and stored durably with an expiry (for example 24 hours), so a merchant can retry safely after a network failure without double charging.
+- **Durable, shared storage.** The current repository is per process.
+- **A reconciliation flow** for unknown outcomes. Today a `502` or `504` gives the merchant no payment id to reconcile with. The fix is to store the payment as `Pending` with an id before calling the bank, return that id on a `502`/`504`, and have a job query the bank to settle it.
 - **PCI DSS scope reduction** through tokenization, so the gateway never handles raw card numbers.
 - **Observability:** metrics, distributed tracing, and alerting on circuit state.
 - **Rate limiting** and request size limits.

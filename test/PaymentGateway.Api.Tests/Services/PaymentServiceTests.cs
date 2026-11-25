@@ -21,7 +21,6 @@ public class PaymentServiceTests
 {
     private readonly IBankClient _bank = Substitute.For<IBankClient>();
     private readonly PaymentsRepository _repository = new();
-    private readonly InMemoryIdempotencyStore _idempotencyStore = new();
     private readonly FakeLogger<PaymentService> _logger = new();
     private readonly PaymentService _service;
 
@@ -31,7 +30,6 @@ public class PaymentServiceTests
             new PostPaymentRequestValidator(new FakeTimeProvider(TestData.Now)),
             _bank,
             _repository,
-            _idempotencyStore,
             _logger);
 
         GivenBankReturns(new BankResult.Authorized("auth-code"));
@@ -59,11 +57,9 @@ public class PaymentServiceTests
     [Fact]
     public async Task An_authorized_payment_is_stored_with_only_the_last_four_digits()
     {
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
-        var processed = Assert.IsType<PaymentResult.Processed>(result);
-        Assert.False(processed.IsReplay);
-        var payment = processed.Payment;
+        var payment = Assert.IsType<PaymentResult.Processed>(result).Payment;
         Assert.NotEqual(Guid.Empty, payment.Id);
         Assert.Equal(PaymentStatus.Authorized, payment.Status);
         Assert.Equal(TestData.CardNumberLastFour, payment.CardNumberLastFour);
@@ -80,7 +76,7 @@ public class PaymentServiceTests
     {
         GivenBankReturns(new BankResult.Declined());
 
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         var payment = Assert.IsType<PaymentResult.Processed>(result).Payment;
         Assert.Equal(PaymentStatus.Declined, payment.Status);
@@ -91,7 +87,7 @@ public class PaymentServiceTests
     [Fact]
     public async Task Sends_the_full_payment_details_to_the_bank()
     {
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         await _bank.Received(1).AuthorizeAsync(
             Arg.Is<PostPaymentRequest>(r =>
@@ -107,8 +103,8 @@ public class PaymentServiceTests
     [Fact]
     public async Task Each_payment_gets_a_new_id()
     {
-        var first = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
-        var second = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        var first = await _service.ProcessPaymentAsync(TestData.ValidRequest());
+        var second = await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         Assert.NotEqual(
             Assert.IsType<PaymentResult.Processed>(first).Payment.Id,
@@ -125,7 +121,7 @@ public class PaymentServiceTests
         request.CardNumber = "not-a-card";
         request.Cvv = "1";
 
-        var result = await _service.ProcessPaymentAsync(request, idempotencyKey: null);
+        var result = await _service.ProcessPaymentAsync(request);
 
         var rejected = Assert.IsType<PaymentResult.Rejected>(result);
         AssertHasErrorFor(rejected, nameof(PostPaymentRequest.CardNumber));
@@ -148,7 +144,7 @@ public class PaymentServiceTests
     {
         GivenBankReturns(bankResult);
 
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         Assert.IsType(expectedResult, result);
     }
@@ -158,7 +154,7 @@ public class PaymentServiceTests
     [Fact]
     public async Task Logs_the_payment_id_and_outcome()
     {
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         var payment = Assert.IsType<PaymentResult.Processed>(result).Payment;
         Assert.Contains(_logger.Collector.GetSnapshot(), record =>
@@ -179,7 +175,7 @@ public class PaymentServiceTests
     {
         GivenBankReturns(bankResult);
 
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
+        await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
         Assert.Contains(_logger.Collector.GetSnapshot(), record => record.Level >= LogLevel.Warning);
     }
@@ -191,8 +187,8 @@ public class PaymentServiceTests
         invalid.CardNumber = "4242abcd42424242";
         invalid.Cvv = "98x";
 
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), idempotencyKey: null);
-        await _service.ProcessPaymentAsync(invalid, idempotencyKey: null);
+        await _service.ProcessPaymentAsync(TestData.ValidRequest());
+        await _service.ProcessPaymentAsync(invalid);
 
         var records = _logger.Collector.GetSnapshot();
         Assert.NotEmpty(records);
@@ -206,129 +202,16 @@ public class PaymentServiceTests
         });
     }
 
-    // Idempotency
+    // Cancellation
 
     [Fact]
-    public async Task The_same_key_and_details_replay_the_original_payment()
+    public async Task The_bank_call_cannot_be_cancelled_because_the_bank_may_complete_it_anyway()
     {
-        var first = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var second = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
+        await _service.ProcessPaymentAsync(TestData.ValidRequest());
 
-        var original = Assert.IsType<PaymentResult.Processed>(first);
-        var replay = Assert.IsType<PaymentResult.Processed>(second);
-        Assert.False(original.IsReplay);
-        Assert.True(replay.IsReplay);
-        Assert.Equal(original.Payment, replay.Payment);
-        await _bank.Received(1).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task The_same_key_with_different_details_is_a_mismatch()
-    {
-        var different = TestData.ValidRequest();
-        different.Amount = 200;
-
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var result = await _service.ProcessPaymentAsync(different, "key-1");
-
-        Assert.IsType<PaymentResult.IdempotencyKeyMismatch>(result);
-        await _bank.Received(1).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task The_same_key_with_only_a_different_cvv_replays_because_the_cvv_is_not_fingerprinted()
-    {
-        var differentCvv = TestData.ValidRequest();
-        differentCvv.Cvv = "456";
-
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var result = await _service.ProcessPaymentAsync(differentCvv, "key-1");
-
-        Assert.True(Assert.IsType<PaymentResult.Processed>(result).IsReplay);
-    }
-
-    [Fact]
-    public async Task A_duplicate_while_the_original_is_in_flight_is_reported_as_in_progress()
-    {
-        var bankAnswer = new TaskCompletionSource<BankResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>()).Returns(bankAnswer.Task);
-
-        var first = _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var second = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        bankAnswer.SetResult(new BankResult.Authorized("auth-code"));
-
-        Assert.IsType<PaymentResult.IdempotencyKeyInProgress>(second);
-        Assert.IsType<PaymentResult.Processed>(await first);
-        await _bank.Received(1).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task The_key_is_released_when_the_bank_definitely_did_not_process_the_payment()
-    {
-        _bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new BankResult.Unavailable(), new BankResult.Authorized("auth-code"));
-
-        var first = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var retry = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-
-        Assert.IsType<PaymentResult.BankUnavailable>(first);
-        Assert.False(Assert.IsType<PaymentResult.Processed>(retry).IsReplay);
-        await _bank.Received(2).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
-    }
-
-    public static TheoryData<BankResult> UnknownOutcomes => new()
-    {
-        new BankResult.Timeout(),
-        new BankResult.Failed("unexpected status 500")
-    };
-
-    [Theory]
-    [MemberData(nameof(UnknownOutcomes))]
-    public async Task The_key_stays_locked_when_the_bank_outcome_is_unknown(BankResult unknownOutcome)
-    {
-        _bank.AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>())
-            .Returns(unknownOutcome, new BankResult.Authorized("auth-code"));
-
-        await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-        var retry = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-
-        Assert.IsType<PaymentResult.IdempotencyKeyOutcomeUnknown>(retry);
-        await _bank.Received(1).AuthorizeAsync(Arg.Any<PostPaymentRequest>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task A_rejected_request_does_not_consume_the_key()
-    {
-        var invalid = TestData.ValidRequest();
-        invalid.Currency = "JPY";
-
-        var rejected = await _service.ProcessPaymentAsync(invalid, "key-1");
-        var corrected = await _service.ProcessPaymentAsync(TestData.ValidRequest(), "key-1");
-
-        Assert.IsType<PaymentResult.Rejected>(rejected);
-        Assert.False(Assert.IsType<PaymentResult.Processed>(corrected).IsReplay);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData(null, 256)]
-    public async Task An_invalid_idempotency_key_is_rejected_without_calling_the_bank(string? key, int length = 0)
-    {
-        key ??= new string('k', length);
-
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), key);
-
-        AssertHasErrorFor(Assert.IsType<PaymentResult.Rejected>(result), "idempotencyKey");
-        await _bank.DidNotReceiveWithAnyArgs().AuthorizeAsync(default!, default);
-    }
-
-    [Fact]
-    public async Task A_255_character_idempotency_key_is_accepted()
-    {
-        var result = await _service.ProcessPaymentAsync(TestData.ValidRequest(), new string('k', 255));
-
-        Assert.IsType<PaymentResult.Processed>(result);
+        await _bank.Received(1).AuthorizeAsync(
+            Arg.Any<PostPaymentRequest>(),
+            Arg.Is<CancellationToken>(token => !token.CanBeCanceled));
     }
 
     private void GivenBankReturns(BankResult result) =>

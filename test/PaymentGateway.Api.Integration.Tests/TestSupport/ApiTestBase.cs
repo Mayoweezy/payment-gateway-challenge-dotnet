@@ -5,7 +5,6 @@ using System.Text.Json;
 using NSubstitute;
 
 using PaymentGateway.Api.Bank;
-using PaymentGateway.Api.Controllers;
 using PaymentGateway.Api.Models.Requests;
 
 namespace PaymentGateway.Api.Integration.Tests.TestSupport;
@@ -45,16 +44,7 @@ public abstract class ApiTestBase : IDisposable
         cvv = Cvv
     };
 
-    protected Task<HttpResponseMessage> PostPaymentAsync(object body, string? idempotencyKey = null)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Post, PaymentsPath) { Content = JsonContent.Create(body) };
-        if (idempotencyKey is not null)
-        {
-            request.Headers.Add(PaymentsController.IdempotencyKeyHeader, idempotencyKey);
-        }
-
-        return Client.SendAsync(request);
-    }
+    protected Task<HttpResponseMessage> PostPaymentAsync(object body) => Client.PostAsJsonAsync(PaymentsPath, body);
 
     protected Task<HttpResponseMessage> PostRawJsonAsync(string json) =>
         Client.PostAsync(PaymentsPath, new StringContent(json, Encoding.UTF8, "application/json"));

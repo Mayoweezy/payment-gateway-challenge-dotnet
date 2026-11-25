@@ -25,18 +25,23 @@ builder.Services.AddControllers()
         options.InvalidModelStateResponseFactory = context =>
             PaymentProblems.Rejected(context.HttpContext, context.ModelState));
 
+// Unhandled exceptions and bare status codes (such as a 404 from a route constraint) become problem responses too.
+builder.Services.AddProblemDetails();
+
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IPaymentsRepository, PaymentsRepository>();
-builder.Services.AddSingleton<IIdempotencyStore, InMemoryIdempotencyStore>();
 builder.Services.AddSingleton<IValidator<PostPaymentRequest>, PostPaymentRequestValidator>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddBankClient(builder.Configuration);
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
