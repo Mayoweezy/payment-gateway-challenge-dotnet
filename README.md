@@ -138,17 +138,19 @@ The brief asks for processing (Authorized, Declined, Rejected), retrieval, the l
 - **Expiry:** a card is valid until the end of its expiry month, in UTC. Years must have four digits.
 - **Currencies:** only `GBP`, `USD` and `EUR` are supported (the brief allows up to three), uppercase only.
 - **Amount:** a positive `int` in minor units. Zero is rejected.
-- **Card number:** ASCII digits only. `char.IsDigit` would accept other numerals, such as Arabic-Indic digits. No Luhn check, because the brief doesn't ask for one and the simulator's test cards don't need it.
+- **Card number:** ASCII digits only. `char.IsDigit` would accept other numerals, such as Arabic-Indic digits. No Luhn/Verhoeff/Damm check or other checks that try to validate card numbers, because the brief doesn't ask for one and the simulator's test cards don't need it.
 - **Identifiers:** GUIDs, as the brief suggests.
 - **Storage:** in memory, as the brief allows. Data is lost on restart.
 
 ## Not done, and what production would need
 
-- **Merchant authentication and isolation.** This is the biggest gap: any caller can read any payment.
+- **Merchant AUTH and isolation.** This is the biggest gap: any caller can read any payment.
 - **Idempotency keys**, scoped per merchant and stored durably with an expiry (for example 24 hours), so a merchant can retry safely after a network failure without double charging.
 - **Durable, shared storage.** The current repository is per process.
-- **A reconciliation flow** for unknown outcomes. Today a `502` or `504` gives the merchant no payment id to reconcile with. The fix is to store the payment as `Pending` with an id before calling the bank, return that id on a `502`/`504`, and have a job query the bank to settle it.
-- **PCI DSS scope reduction** through tokenization, so the gateway never handles raw card numbers.
-- **Observability:** metrics, distributed tracing, and alerting on circuit state.
-- **Rate limiting** and request size limits.
+- **A reconciliation flow** for unknown outcomes. Today a `502` or `504` gives the merchant no payment id to reconcile with. A potential fix is to store the payment as `Pending` with an id before calling the bank, return that id on a `502`/`504`, and have a job query the bank to settle it.
+- **PCI DSS scope reduction** through tokenization, so the gateway never handles raw card numbers. If necessary to store sensitive data, consider encrypting data at rest and in transit.
+- **Observability:** metrics, distributed tracing, and alerting scenarios e.g. on circuit state.
+- **Rate limiting** and request size limits, concurrency limits etc..
+- **CI/CD** Code Review, static analyzer for security vulnerabilities etc.
+- **Scale** Load tests are missing. Expected amount of users, SLAs.
 - **Several acquiring banks.** Each bank has its own wire format, so these would justify per-bank folders behind `IBankClient`.
