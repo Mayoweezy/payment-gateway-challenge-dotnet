@@ -13,15 +13,15 @@ public abstract record PaymentResult
     /// <summary>The request was invalid, so the bank was not called. Keys are request property names.</summary>
     public sealed record Rejected(IReadOnlyDictionary<string, string[]> Errors) : PaymentResult;
 
-    /// <summary>The bank definitely did not process the payment (circuit open or bank returned 503). Safe to retry.</summary>
+    /// <summary>Not processed. Safe to retry later.</summary>
     public sealed record BankUnavailable : PaymentResult;
 
-    /// <summary>The bank refused the request, so it definitely did not process the payment. A gateway error.</summary>
+    /// <summary>The bank refused the request. Not processed.</summary>
     public sealed record BankRefused : PaymentResult;
 
-    /// <summary>The bank did not answer in time. The outcome is unknown.</summary>
+    /// <summary>The bank timed out. Outcome unknown.</summary>
     public sealed record BankTimeout : PaymentResult;
 
-    /// <summary>The bank failed or answered unexpectedly. The outcome is unknown.</summary>
+    /// <summary>The bank call failed. Outcome unknown.</summary>
     public sealed record BankFailed : PaymentResult;
 }

@@ -76,10 +76,12 @@ public class BankClientTests
         Assert.IsType<BankResult.Declined>(result);
     }
 
-    [Fact]
-    public async Task A_503_means_the_bank_is_unavailable()
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task A_503_or_429_means_the_bank_is_unavailable(HttpStatusCode statusCode)
     {
-        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.ServiceUnavailable, "{}");
+        var handler = StubHttpMessageHandler.Returning(statusCode, "{}");
 
         var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
 

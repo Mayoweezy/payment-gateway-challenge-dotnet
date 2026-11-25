@@ -3,9 +3,7 @@ using PaymentGateway.Api.Models.Requests;
 namespace PaymentGateway.Api.Models;
 
 /// <summary>
-/// A payment request that passed validation, so every field is present. Holds the full card number and CVV, so it
-/// is only ever sent to the bank, never stored or logged. Deliberately a class rather than a record: a record's
-/// generated ToString would print the card number and CVV.
+/// A validated payment request, sent only to the bank. A class, not a record, so ToString can't print card data.
 /// </summary>
 public sealed class CardPayment
 {

@@ -10,14 +10,13 @@ using static PaymentGateway.Api.Controllers.PaymentProblems;
 
 namespace PaymentGateway.Api.Controllers;
 
-/// <summary>Maps HTTP to the payment service and payment results back to HTTP. Holds no business logic.</summary>
+/// <summary>Maps HTTP to the payment service. No business logic.</summary>
 [Route("api/[controller]")]
 [ApiController]
 public class PaymentsController : ControllerBase
 {
     public const string GetPaymentRouteName = "GetPayment";
 
-    /// <summary>How long a merchant should wait before retrying after the bank was unavailable.</summary>
     public static readonly TimeSpan BankUnavailableRetryAfter = TimeSpan.FromSeconds(5);
 
     private readonly IPaymentService _paymentService;
@@ -37,7 +36,6 @@ public class PaymentsController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status504GatewayTimeout, ContentType)]
     public async Task<IActionResult> PostPaymentAsync([FromBody] PostPaymentRequest request)
     {
-        // No cancellation token on purpose: a merchant disconnecting must not abort a call the bank may complete.
         var result = await _paymentService.ProcessPaymentAsync(request);
 
         return result switch

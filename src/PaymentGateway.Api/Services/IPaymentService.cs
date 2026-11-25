@@ -5,10 +5,7 @@ namespace PaymentGateway.Api.Services;
 
 public interface IPaymentService
 {
-    /// <summary>
-    /// Validates the payment, sends it to the bank and stores the outcome. Deliberately takes no cancellation token:
-    /// once the bank has been called, the payment must be recorded even if the merchant has disconnected.
-    /// </summary>
+    /// <summary>No cancellation token: once the bank is called, the outcome must be recorded.</summary>
     Task<PaymentResult> ProcessPaymentAsync(PostPaymentRequest request);
 
     Payment? GetPayment(Guid id);

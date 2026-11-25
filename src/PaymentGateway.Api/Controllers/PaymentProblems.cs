@@ -6,22 +6,15 @@ using PaymentGateway.Api.Models;
 
 namespace PaymentGateway.Api.Controllers;
 
-/// <summary>
-/// Builds the RFC 9457 problem responses for every payment failure, so clients can tell them apart by "type".
-/// </summary>
+/// <summary>RFC 9457 problem responses, each failure with its own "type".</summary>
 public static class PaymentProblems
 {
     public const string ContentType = "application/problem+json";
 
-    /// <summary>
-    /// ProblemDetails reserves "status" for the HTTP status code, so the payment status goes in this field.
-    /// </summary>
+    /// <summary>ProblemDetails reserves "status" for the HTTP code.</summary>
     public const string PaymentStatusField = "paymentStatus";
 
-    /// <summary>
-    /// Not a <see cref="PaymentStatus"/> value, because a rejected payment is never created or stored, and keeping it
-    /// out of the enum keeps it out of the payment schema in Swagger.
-    /// </summary>
+    /// <summary>Not a <see cref="PaymentStatus"/>, because a rejected request is never stored.</summary>
     public const string RejectedPaymentStatus = "Rejected";
 
     public static class Types
@@ -49,7 +42,7 @@ public static class PaymentProblems
         return Rejected(httpContext, modelState);
     }
 
-    /// <summary>Also used for malformed JSON, so every invalid request gets the same response shape.</summary>
+    /// <summary>Also used for malformed JSON.</summary>
     public static ObjectResult Rejected(HttpContext httpContext, ModelStateDictionary modelState)
     {
         var problem = Factory(httpContext).CreateValidationProblemDetails(

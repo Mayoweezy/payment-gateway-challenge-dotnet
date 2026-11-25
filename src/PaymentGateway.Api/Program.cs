@@ -25,7 +25,7 @@ builder.Services.AddControllers()
         options.InvalidModelStateResponseFactory = context =>
             PaymentProblems.Rejected(context.HttpContext, context.ModelState));
 
-// Unhandled exceptions and bare status codes (such as a 404 from a route constraint) become problem responses too.
+// Problem responses for unhandled exceptions and bare status codes too.
 builder.Services.AddProblemDetails();
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

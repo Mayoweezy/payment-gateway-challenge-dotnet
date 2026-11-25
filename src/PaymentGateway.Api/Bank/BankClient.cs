@@ -11,10 +11,7 @@ using Polly.Timeout;
 
 namespace PaymentGateway.Api.Bank;
 
-/// <summary>
-/// Translates between the gateway and the acquiring bank's wire format. Never logs request or response bodies,
-/// because the request contains the full card number and CVV.
-/// </summary>
+/// <summary>Maps payments to the bank's wire format and back. Never logs bodies, which hold card data.</summary>
 public sealed class BankClient : IBankClient
 {
     public const string PaymentsPath = "payments";
@@ -73,16 +70,15 @@ public sealed class BankClient : IBankClient
 
     private async Task<BankResult> InterpretAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        if (response.StatusCode == HttpStatusCode.ServiceUnavailable)
+        if (response.StatusCode is HttpStatusCode.ServiceUnavailable or HttpStatusCode.TooManyRequests)
         {
-            _logger.LogWarning("Bank returned 503 Service Unavailable");
+            _logger.LogWarning("Bank returned {StatusCode}", (int)response.StatusCode);
             return new BankResult.Unavailable();
         }
 
         if ((int)response.StatusCode is >= 400 and < 500)
         {
-            // The bank refused the request, so it did not process the payment. Validation should prevent this.
-            _logger.LogError("Bank refused the request with status {StatusCode}", (int)response.StatusCode);
+            _logger.LogWarning("Bank refused the request with status {StatusCode}", (int)response.StatusCode);
             return new BankResult.Refused((int)response.StatusCode);
         }
 

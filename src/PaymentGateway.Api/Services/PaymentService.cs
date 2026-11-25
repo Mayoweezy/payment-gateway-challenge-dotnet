@@ -9,9 +9,7 @@ using PaymentGateway.Api.Models.Requests;
 
 namespace PaymentGateway.Api.Services;
 
-/// <summary>
-/// Validates a payment, sends it to the bank and stores the outcome. Never logs the full card number or the CVV.
-/// </summary>
+/// <summary>Validates, calls the bank and stores the outcome. Never logs card data.</summary>
 public sealed class PaymentService : IPaymentService
 {
     private readonly IValidator<PostPaymentRequest> _validator;
@@ -42,8 +40,7 @@ public sealed class PaymentService : IPaymentService
 
         var payment = CardPayment.FromValidRequest(request);
 
-        // Not cancellable by the merchant: the bank may authorize the payment even if the merchant disconnects,
-        // and the gateway must still record it. The bank client's own timeout bounds the call.
+        // Not cancellable: a disconnect must not abort a call the bank may complete.
         var bankResult = await _bankClient.AuthorizeAsync(payment, CancellationToken.None);
 
         return bankResult switch
@@ -97,7 +94,6 @@ public sealed class PaymentService : IPaymentService
 
     private PaymentResult BankRefused(int statusCode)
     {
-        // Validation should stop anything the bank would refuse, so this points to a gateway bug.
         _logger.LogError("Payment not processed because the bank refused the request with status {StatusCode}", statusCode);
         return new PaymentResult.BankRefused();
     }

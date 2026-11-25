@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using System.Net;
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
@@ -12,13 +12,15 @@ namespace PaymentGateway.Api.Integration.Tests.Resilience;
 
 /// <summary>
 /// Exercises the real HttpClient and Polly pipeline registered by AddBankClient, with only the network replaced.
-/// The circuit opens once 2 calls have been sampled and at least half of them failed.
+/// The circuit opens once 2 calls have been sampled and at least half of them failed. Time is faked, so nothing waits.
 /// </summary>
 public sealed class BankResilienceTests : IDisposable
 {
     private const string AuthorizedJson = """{"authorized":true,"authorization_code":"auth-code"}""";
-    private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
+    private readonly FakeTimeProvider _time = new();
     private ServiceProvider? _provider;
 
     [Theory]
@@ -75,7 +77,7 @@ public sealed class BankResilienceTests : IDisposable
         Assert.IsType<BankResult.Unavailable>(await bank.AuthorizeAsync(ValidRequest()));
 
         handler.Responder = (_, _) => Task.FromResult(StubHttpMessageHandler.Response(HttpStatusCode.OK, AuthorizedJson));
-        await Task.Delay(BreakDuration + TimeSpan.FromMilliseconds(300));
+        _time.Advance(BreakDuration);
 
         Assert.IsType<BankResult.Authorized>(await bank.AuthorizeAsync(ValidRequest()));
     }
@@ -83,37 +85,48 @@ public sealed class BankResilienceTests : IDisposable
     [Fact]
     public async Task A_slow_bank_times_out_without_waiting_for_it()
     {
-        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
-        {
-            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
-            return StubHttpMessageHandler.Response(HttpStatusCode.OK, AuthorizedJson);
-        });
-        var bank = CreateBankClient(handler, timeout: TimeSpan.FromMilliseconds(200));
-        var stopwatch = Stopwatch.StartNew();
+        var handler = HangingBank(out var called);
+        var bank = CreateBankClient(handler, Timeout);
 
-        var result = await bank.AuthorizeAsync(ValidRequest());
+        var result = await AuthorizeAndTimeOutAsync(bank, called);
 
         Assert.IsType<BankResult.Timeout>(result);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Took {stopwatch.Elapsed}.");
         Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]
     public async Task Timeouts_count_towards_opening_the_circuit()
     {
-        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
-        {
-            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
-            return StubHttpMessageHandler.Response(HttpStatusCode.OK, AuthorizedJson);
-        });
-        var bank = CreateBankClient(handler, timeout: TimeSpan.FromMilliseconds(100));
+        var handler = HangingBank(out var called);
+        var bank = CreateBankClient(handler, Timeout);
 
-        await bank.AuthorizeAsync(ValidRequest());
-        await bank.AuthorizeAsync(ValidRequest());
+        await AuthorizeAndTimeOutAsync(bank, called);
+        await AuthorizeAndTimeOutAsync(bank, called);
         var shortCircuited = await bank.AuthorizeAsync(ValidRequest());
 
         Assert.IsType<BankResult.Unavailable>(shortCircuited);
         Assert.Equal(2, handler.CallCount);
+    }
+
+    /// <summary>A bank that never answers. Signals each call, so the test knows when to advance the clock.</summary>
+    private static StubHttpMessageHandler HangingBank(out SemaphoreSlim called)
+    {
+        var signal = new SemaphoreSlim(0);
+        called = signal;
+        return new StubHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            signal.Release();
+            await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        });
+    }
+
+    private async Task<BankResult> AuthorizeAndTimeOutAsync(IBankClient bank, SemaphoreSlim called)
+    {
+        var call = bank.AuthorizeAsync(ValidRequest());
+        Assert.True(await called.WaitAsync(TimeSpan.FromSeconds(5)), "The bank was never called.");
+        _time.Advance(Timeout);
+        return await call.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     private IBankClient CreateBankClient(StubHttpMessageHandler handler, TimeSpan? timeout = null)
@@ -132,6 +145,7 @@ public sealed class BankResilienceTests : IDisposable
 
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<TimeProvider>(_time);
         services.AddBankClient(configuration).ConfigurePrimaryHttpMessageHandler(() => handler);
 
         _provider = services.BuildServiceProvider();

@@ -1,8 +1,6 @@
 namespace PaymentGateway.Api.Models;
 
-/// <summary>
-/// A payment that was sent to the acquiring bank. Never holds the full card number or the CVV.
-/// </summary>
+/// <summary>A processed payment. Never holds the full card number or CVV.</summary>
 public sealed record Payment(
     Guid Id,
     PaymentStatus Status,

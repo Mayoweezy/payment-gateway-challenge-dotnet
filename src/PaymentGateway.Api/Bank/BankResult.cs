@@ -6,18 +6,15 @@ public abstract record BankResult
 
     public sealed record Declined : BankResult;
 
-    /// <summary>The bank definitely did not process the payment: it returned 503, or the circuit is open.</summary>
+    /// <summary>Not processed and safe to retry later: a 503, a 429, no connection, or an open circuit.</summary>
     public sealed record Unavailable : BankResult;
 
-    /// <summary>
-    /// The bank refused the request with a 4xx, so it definitely did not process the payment. Validation should
-    /// prevent this, so it points to a gateway bug or a change in the bank's contract.
-    /// </summary>
+    /// <summary>Any other 4xx: not processed, and validation should have prevented it.</summary>
     public sealed record Refused(int StatusCode) : BankResult;
 
-    /// <summary>No answer in time. The bank may or may not have processed the payment.</summary>
+    /// <summary>No answer in time. Outcome unknown.</summary>
     public sealed record Timeout : BankResult;
 
-    /// <summary>Any other failure or unexpected response. The outcome is unknown.</summary>
+    /// <summary>Any other failure. Outcome unknown.</summary>
     public sealed record Failed(string Reason) : BankResult;
 }
