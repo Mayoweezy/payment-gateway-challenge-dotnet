@@ -104,6 +104,19 @@ public class BankClientTests
     }
 
     [Theory]
+    [InlineData(HttpStatusCode.Found)]
+    [InlineData(HttpStatusCode.TemporaryRedirect)]
+    [InlineData(HttpStatusCode.PermanentRedirect)]
+    public async Task A_redirect_is_an_unknown_outcome(HttpStatusCode statusCode)
+    {
+        var handler = StubHttpMessageHandler.Returning(statusCode);
+
+        var result = await CreateClient(handler).AuthorizeAsync(TestData.ValidPayment());
+
+        Assert.IsType<BankResult.Failed>(result);
+    }
+
+    [Theory]
     [InlineData(HttpStatusCode.InternalServerError)]
     [InlineData(HttpStatusCode.BadGateway)]
     public async Task Any_other_error_status_is_a_failure(HttpStatusCode statusCode)

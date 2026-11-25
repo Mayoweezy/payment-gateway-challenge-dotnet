@@ -43,6 +43,8 @@ public static class BankServiceCollectionExtensions
 
             // The pipeline timeout applies instead, so the circuit breaker sees it.
             client.Timeout = Timeout.InfiniteTimeSpan;
-        });
+        })
+        // A followed 307 or 308 would resend the card data to wherever Location points.
+        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
     }
 }

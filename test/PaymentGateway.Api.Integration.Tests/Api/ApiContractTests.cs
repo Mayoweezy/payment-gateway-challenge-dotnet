@@ -19,4 +19,15 @@ public class ApiContractTests : ApiTestBase
 
         Assert.Equal(["Authorized", "Declined"], statuses);
     }
+
+    [Fact]
+    public async Task Operations_carry_their_summary_comments()
+    {
+        var document = await ReadJsonAsync(await Client.GetAsync("/swagger/v1/swagger.json"));
+
+        var summary = document.GetProperty("paths").GetProperty("/api/Payments").GetProperty("post")
+            .GetProperty("summary").GetString();
+
+        Assert.Equal("Processes a card payment through the acquiring bank.", summary);
+    }
 }
