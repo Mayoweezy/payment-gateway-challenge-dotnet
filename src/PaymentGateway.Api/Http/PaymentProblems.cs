@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 using PaymentGateway.Api.Models;
 
-namespace PaymentGateway.Api.Controllers;
+namespace PaymentGateway.Api.Http;
 
 /// <summary>RFC 9457 problem responses, each failure with its own "type".</summary>
 public static class PaymentProblems

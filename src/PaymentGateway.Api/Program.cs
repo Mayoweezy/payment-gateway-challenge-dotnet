@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using FluentValidation;
 
 using PaymentGateway.Api.Bank;
-using PaymentGateway.Api.Controllers;
+using PaymentGateway.Api.Http;
 using PaymentGateway.Api.Data;
 using PaymentGateway.Api.Models.Requests;
 using PaymentGateway.Api.Services;

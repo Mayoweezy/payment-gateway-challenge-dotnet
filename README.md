@@ -94,7 +94,8 @@ PaymentsController             HTTP mapping only
 
 ```
 src/PaymentGateway.Api/
-  Controllers/   PaymentsController, PaymentProblems (problem responses)
+  Controllers/   PaymentsController
+  Http/          PaymentResult to HTTP mapping, problem responses
   Services/      IPaymentService, PaymentService, PaymentResult
   Bank/          IBankClient, BankClient, BankResult, options, DI registration
   Bank/Requests, Bank/Responses   the bank's wire format

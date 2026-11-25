@@ -1,7 +1,7 @@
 using System.Net;
 
 using PaymentGateway.Api.Bank;
-using PaymentGateway.Api.Controllers;
+using PaymentGateway.Api.Http;
 using PaymentGateway.Api.Integration.Tests.TestSupport;
 
 namespace PaymentGateway.Api.Integration.Tests.Api;
