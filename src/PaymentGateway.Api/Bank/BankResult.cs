@@ -6,7 +6,7 @@ public abstract record BankResult
 
     public sealed record Declined : BankResult;
 
-    /// <summary>Not processed and safe to retry later: a 503, a 429, no connection, or an open circuit.</summary>
+    /// <summary>Not processed and safe to retry later: a 503, 429 or 408, no connection, or an open circuit.</summary>
     public sealed record Unavailable : BankResult;
 
     /// <summary>Any other 4xx: not processed, and validation should have prevented it.</summary>

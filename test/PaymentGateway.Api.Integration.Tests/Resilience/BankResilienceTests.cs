@@ -53,6 +53,20 @@ public sealed class BankResilienceTests : IDisposable
         Assert.Equal(5, handler.CallCount);
     }
 
+    [Fact]
+    public async Task Malformed_responses_count_towards_opening_the_circuit()
+    {
+        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, "not json");
+        var bank = CreateBankClient(handler);
+
+        await bank.AuthorizeAsync(ValidRequest());
+        await bank.AuthorizeAsync(ValidRequest());
+        var shortCircuited = await bank.AuthorizeAsync(ValidRequest());
+
+        Assert.IsType<BankResult.Unavailable>(shortCircuited);
+        Assert.Equal(2, handler.CallCount);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     [InlineData(HttpStatusCode.InternalServerError)]

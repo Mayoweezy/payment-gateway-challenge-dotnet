@@ -1,5 +1,3 @@
-using System.Net;
-
 using Microsoft.Extensions.Options;
 
 using Polly;
@@ -17,19 +15,18 @@ public static class BankServiceCollectionExtensions
         services.AddSingleton(serviceProvider =>
         {
             var options = serviceProvider.GetRequiredService<IOptions<BankOptions>>().Value;
-            var pipeline = new ResiliencePipelineBuilder<(HttpStatusCode Status, BankResult Result)>
+            var pipeline = new ResiliencePipelineBuilder<BankResult>
             {
                 TimeProvider = serviceProvider.GetRequiredService<TimeProvider>()
             };
 
             // The shared breaker observes timeouts during both the send and the response body read.
-            return pipeline.AddCircuitBreaker(new CircuitBreakerStrategyOptions<(HttpStatusCode Status, BankResult Result)>
+            return pipeline.AddCircuitBreaker(new CircuitBreakerStrategyOptions<BankResult>
             {
-                ShouldHandle = new PredicateBuilder<(HttpStatusCode Status, BankResult Result)>()
+                ShouldHandle = new PredicateBuilder<BankResult>()
                     .Handle<HttpRequestException>()
                     .Handle<TimeoutRejectedException>()
-                    .HandleResult(reply => (int)reply.Status >= 500 ||
-                        reply.Status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests),
+                    .HandleResult(result => result is BankResult.Unavailable or BankResult.Failed),
                 FailureRatio = options.FailureRatio,
                 MinimumThroughput = options.MinimumThroughput,
                 SamplingDuration = options.SamplingDuration,

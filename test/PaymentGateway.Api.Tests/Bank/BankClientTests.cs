@@ -81,7 +81,8 @@ public class BankClientTests
     [Theory]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     [InlineData(HttpStatusCode.TooManyRequests)]
-    public async Task A_503_or_429_means_the_bank_is_unavailable(HttpStatusCode statusCode)
+    [InlineData(HttpStatusCode.RequestTimeout)]
+    public async Task A_503_429_or_408_means_the_bank_is_unavailable(HttpStatusCode statusCode)
     {
         var handler = StubHttpMessageHandler.Returning(statusCode, "{}");
 
@@ -230,5 +231,5 @@ public class BankClientTests
     private static BankClient CreateClient(StubHttpMessageHandler handler,
         ILogger<BankClient>? logger = null) =>
         new(new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") },
-            logger ?? NullLogger<BankClient>.Instance, ResiliencePipeline<(HttpStatusCode, BankResult)>.Empty);
+            logger ?? NullLogger<BankClient>.Instance, ResiliencePipeline<BankResult>.Empty);
 }

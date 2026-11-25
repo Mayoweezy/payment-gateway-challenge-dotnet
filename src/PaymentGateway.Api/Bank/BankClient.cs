@@ -19,10 +19,10 @@ public sealed class BankClient : IBankClient
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<BankClient> _logger;
-    private readonly ResiliencePipeline<(HttpStatusCode Status, BankResult Result)> _pipeline;
+    private readonly ResiliencePipeline<BankResult> _pipeline;
 
     public BankClient(HttpClient httpClient, ILogger<BankClient> logger,
-        ResiliencePipeline<(HttpStatusCode Status, BankResult Result)> pipeline)
+        ResiliencePipeline<BankResult> pipeline)
     {
         _httpClient = httpClient;
         _logger = logger;
@@ -33,12 +33,11 @@ public sealed class BankClient : IBankClient
     {
         try
         {
-            var outcome = await _pipeline.ExecuteAsync(async token =>
+            return await _pipeline.ExecuteAsync(async token =>
             {
                 using var response = await _httpClient.PostAsJsonAsync(PaymentsPath, ToBankRequest(payment), token);
-                return (Status: response.StatusCode, Result: await InterpretAsync(response, token));
+                return await InterpretAsync(response, token);
             }, cancellationToken);
-            return outcome.Result;
         }
         catch (BrokenCircuitException)
         {
@@ -73,7 +72,8 @@ public sealed class BankClient : IBankClient
 
     private async Task<BankResult> InterpretAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        if (response.StatusCode is HttpStatusCode.ServiceUnavailable or HttpStatusCode.TooManyRequests)
+        if (response.StatusCode is HttpStatusCode.ServiceUnavailable or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.RequestTimeout)
         {
             _logger.LogWarning("Bank returned {StatusCode}", (int)response.StatusCode);
             return new BankResult.Unavailable();
