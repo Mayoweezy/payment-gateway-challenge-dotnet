@@ -95,6 +95,56 @@ public sealed class BankResilienceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_bank_that_stalls_after_sending_headers_times_out()
+    {
+        var body = new StalledBankResponse();
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body }));
+        var bank = CreateBankClient(handler, Timeout);
+
+        var authorization = bank.AuthorizeAsync(ValidRequest());
+        try
+        {
+            await body.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            _time.Advance(Timeout);
+
+            var completed = await Task.WhenAny(authorization, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.True(completed == authorization,
+                "The bank deadline elapsed after HTTP 200 headers and a partial body, but authorization was still pending.");
+            Assert.IsType<BankResult.Timeout>(await authorization);
+            Assert.Equal(1, handler.CallCount);
+        }
+        finally
+        {
+            body.Resume.TrySetResult();
+            await authorization.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private sealed class StalledBankResponse : HttpContent
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken token)
+        {
+            await stream.WriteAsync("{"u8.ToArray(), token);
+            Started.TrySetResult();
+            await Resume.Task.WaitAsync(token);
+            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(AuthorizedJson[1..]), token);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    [Fact]
     public async Task Timeouts_count_towards_opening_the_circuit()
     {
         var handler = HangingBank(out var called);

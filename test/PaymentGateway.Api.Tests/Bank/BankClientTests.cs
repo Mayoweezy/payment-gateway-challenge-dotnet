@@ -1,12 +1,14 @@
 using System.Net;
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 
 using PaymentGateway.Api.Bank;
 using PaymentGateway.Api.Tests.TestSupport;
 
+using Polly;
 using Polly.CircuitBreaker;
 using Polly.Timeout;
 
@@ -200,7 +202,7 @@ public class BankClientTests
     {
         var logger = new FakeLogger<BankClient>();
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.InternalServerError, "{}");
-        var client = new BankClient(new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") }, logger);
+        var client = CreateClient(handler, logger);
 
         await client.AuthorizeAsync(TestData.ValidPayment());
 
@@ -212,6 +214,8 @@ public class BankClientTests
         });
     }
 
-    private static BankClient CreateClient(StubHttpMessageHandler handler) =>
-        new(new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") }, NullLogger<BankClient>.Instance);
+    private static BankClient CreateClient(StubHttpMessageHandler handler,
+        ILogger<BankClient>? logger = null) =>
+        new(new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") },
+            logger ?? NullLogger<BankClient>.Instance, ResiliencePipeline<(HttpStatusCode, BankResult)>.Empty);
 }

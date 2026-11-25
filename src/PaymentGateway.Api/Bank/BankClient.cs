@@ -6,6 +6,7 @@ using PaymentGateway.Api.Bank.Requests;
 using PaymentGateway.Api.Bank.Responses;
 using PaymentGateway.Api.Models;
 
+using Polly;
 using Polly.CircuitBreaker;
 using Polly.Timeout;
 
@@ -18,19 +19,26 @@ public sealed class BankClient : IBankClient
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<BankClient> _logger;
+    private readonly ResiliencePipeline<(HttpStatusCode Status, BankResult Result)> _pipeline;
 
-    public BankClient(HttpClient httpClient, ILogger<BankClient> logger)
+    public BankClient(HttpClient httpClient, ILogger<BankClient> logger,
+        ResiliencePipeline<(HttpStatusCode Status, BankResult Result)> pipeline)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _pipeline = pipeline;
     }
 
     public async Task<BankResult> AuthorizeAsync(CardPayment payment, CancellationToken cancellationToken = default)
     {
-        HttpResponseMessage response;
         try
         {
-            response = await _httpClient.PostAsJsonAsync(PaymentsPath, ToBankRequest(payment), cancellationToken);
+            var outcome = await _pipeline.ExecuteAsync(async token =>
+            {
+                using var response = await _httpClient.PostAsJsonAsync(PaymentsPath, ToBankRequest(payment), token);
+                return (Status: response.StatusCode, Result: await InterpretAsync(response, token));
+            }, cancellationToken);
+            return outcome.Result;
         }
         catch (BrokenCircuitException)
         {
@@ -60,11 +68,6 @@ public sealed class BankClient : IBankClient
             // The request may have reached the bank before the connection failed.
             _logger.LogWarning("Bank call failed with a network error: {Error}", exception.HttpRequestError);
             return new BankResult.Failed("network error");
-        }
-
-        using (response)
-        {
-            return await InterpretAsync(response, cancellationToken);
         }
     }
 
