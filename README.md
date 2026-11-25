@@ -1,18 +1,156 @@
-# Instructions for candidates
+# Payment Gateway
 
-This is the .NET version of the Payment Gateway challenge. If you haven't already read this [README.md](https://github.com/cko-recruitment/) on the details of this exercise, please do so now. 
+An ASP.NET Core 8 API that lets a merchant process a card payment through an acquiring bank and retrieve it later. The bank is the Mountebank simulator in `imposters/`.
 
-## Template structure
-```
-src/
-    PaymentGateway.Api - a skeleton ASP.NET Core Web API
-test/
-    PaymentGateway.Api.Tests - an empty xUnit test project
-imposters/ - contains the bank simulator configuration. Don't change this
+The assessment brief is on the [cko-recruitment](https://github.com/cko-recruitment/) page.
 
-.editorconfig - don't change this. It ensures a consistent set of rules for submissions when reformatting code
-docker-compose.yml - configures the bank simulator
-PaymentGateway.sln
+## Running it
+
+Prerequisites: the .NET 8 SDK (or a later SDK plus the ASP.NET Core 8 runtime), and Docker for the bank simulator.
+
+```bash
+docker-compose up -d                          # bank simulator on http://localhost:8080
+dotnet run --project src/PaymentGateway.Api   # Swagger UI opens at /swagger
 ```
 
-Feel free to change the structure of the solution, use a different test library etc.
+The simulator decides the outcome from the last digit of the card number:
+
+| Last digit | Result |
+|---|---|
+| 1, 3, 5, 7, 9 | Authorized |
+| 2, 4, 6, 8 | Declined |
+| 0 | Bank returns 503 |
+
+## Testing
+
+```bash
+dotnet test test/PaymentGateway.Api.Tests                                                          # unit
+dotnet test test/PaymentGateway.Api.Integration.Tests --filter "Category!=RequiresDocker"          # integration, no Docker
+dotnet test test/PaymentGateway.Api.Integration.Tests --filter "Category=RequiresDocker"           # against the running simulator
+```
+
+| Project | What it covers |
+|---|---|
+| `PaymentGateway.Api.Tests` | Validation rules and boundaries, `PaymentService` orchestration, the bank's wire contract and error mapping, and the thread safety of the repository |
+| `PaymentGateway.Api.Integration.Tests` | The real app through `WebApplicationFactory` with a mocked bank: every HTTP status, header and body. The real Polly pipeline over a stub HTTP handler. Smoke tests against the simulator |
+
+The tests were written first, against `NotImplementedException` stubs, and then made to pass.
+
+## API
+
+### `POST /api/payments`
+
+```json
+{
+  "cardNumber": "2222405343248877",
+  "expiryMonth": 4,
+  "expiryYear": 2027,
+  "currency": "GBP",
+  "amount": 100,
+  "cvv": "123"
+}
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| Authorized or declined | `201` + `Location` | Payment |
+| Invalid request | `400` | Validation problem with `paymentStatus: "Rejected"` |
+| Bank unavailable, rate limited or circuit open | `503` + `Retry-After: 5` | Problem |
+| Bank timed out | `504` | Problem |
+| Bank refused the request (4xx) | `502` | Problem, payment not processed |
+| Bank call failed | `502` | Problem, outcome unknown |
+| Unexpected server error | `500` | Problem |
+
+### `GET /api/payments/{id}`
+
+Returns `200` with the payment, or `404` with a problem body.
+
+A payment looks like this:
+
+```json
+{
+  "id": "3c3b6b8e-5f1e-4b8e-9b0a-1f2d3c4b5a69",
+  "status": "Authorized",
+  "cardNumberLastFour": "8877",
+  "expiryMonth": 4,
+  "expiryYear": 2027,
+  "currency": "GBP",
+  "amount": 100
+}
+```
+
+Every error is an RFC 9457 `application/problem+json` body, including unhandled exceptions and route mismatches such as a non-GUID id. Each payment failure has its own `type` (for example `urn:payment-gateway:problem:bank-timeout`), so clients can branch on it without parsing messages.
+
+## Design
+
+```
+PaymentsController             HTTP mapping only
+  -> IPaymentService           validation, orchestration, logging
+       -> IValidator<PostPaymentRequest>   FluentValidation
+       -> IBankClient                      typed HttpClient
+            -> Polly: circuit breaker -> timeout (no retries)
+       -> IPaymentsRepository              in-memory
+```
+
+```
+src/PaymentGateway.Api/
+  Controllers/   PaymentsController
+  Http/          PaymentResult to HTTP mapping, problem responses
+  Services/      IPaymentService, PaymentService, PaymentResult
+  Bank/          IBankClient, BankClient, BankResult, options, DI registration
+  Bank/Requests, Bank/Responses   the bank's wire format
+  Data/          payment repository (the brief's test double)
+  Validation/    PostPaymentRequestValidator
+  Models/        Payment, CardPayment (a validated request), PaymentStatus, API request and response
+```
+
+`PaymentService` returns a closed set of `PaymentResult` cases, and the controller maps each to HTTP. Business logic never deals with status codes, and the controller never deals with business rules.
+
+## Key decisions
+
+**Card data never leaks.** Only the last four digits are stored. The full card number and CVV are never stored, returned or logged. Validation messages never include the submitted value, and malformed JSON is not echoed back (`AllowInputFormatterExceptionMessages = false`). Tests check responses and logs for card data.
+
+**Rejected is a 400, not a stored payment.** The brief lists `Rejected` as an outcome but not as a stored status, and the bank is never contacted. ProblemDetails reserves `status` for the HTTP code, so the payment status is in a `paymentStatus` field. `Rejected` is deliberately not a `PaymentStatus` value, so the payment schema only ever shows `Authorized` or `Declined`. Malformed JSON gets the same response shape as a failed validation.
+
+**A decline is a `201`.** The payment was created and processed. The bank declining it is a business outcome, not a client error.
+
+**No retries, but a circuit breaker.** The bank has no idempotency support, so retrying after a timeout could charge the shopper twice. The circuit breaker (outer) and timeout (inner, so timeouts count as failures) stop a struggling bank from tying up requests. Bank 400s don't count as failures, because they indicate a bad request, not an unhealthy bank. With the defaults in `appsettings.json`, the circuit opens when at least 10 calls in 30 seconds include 50% failures, and stays open for 15 seconds. Simulator caveat: cards ending in `0` always return 503, so enough of them open the circuit for every card.
+
+**Failures say whether a retry is safe.** When the bank definitely didn't process the payment (it returned 503, 429 or 408, the connection was refused, or the circuit is open), the response is a `503` with `Retry-After`. When the bank refuses the request with a 4xx, it's a `502` whose `type` is `bank-refused`: the payment wasn't processed, but retrying the same request won't help, because validation should have caught whatever the bank objected to. When the outcome is unknown (timeout, a dropped connection, an unexpected response), it's a `504` or `502` with no `Retry-After`. The payment may have gone through, so the merchant must reconcile.
+
+**Redirects from the bank aren't followed.** `HttpClient` follows them by default, and on a `307` or `308` it resends the POST body, with the full card number and CVV, to wherever `Location` points. That could be an origin nobody vetted. So automatic redirects are disabled, and a `3xx` is treated as an unknown outcome (`502`): the bank received the request, and the gateway can't tell what it did with it.
+
+**A merchant disconnecting doesn't cancel the bank call.** The bank may authorize a payment after the merchant drops the connection, and the gateway must still record it. So the request's cancellation token is deliberately not passed to the bank; the bank call is bounded by its own timeout instead.
+
+**Validated input becomes a non-nullable type.** `PostPaymentRequest` has nullable fields so a missing field can be told apart from a zero. Once it passes validation, the service converts it to a `CardPayment` with no nullable fields, so the bank client and storage can't receive an incomplete payment. `CardPayment` is a class rather than a record because a record's generated `ToString()` would print the card number and CVV.
+
+**Interfaces at boundaries, real collaborators in tests.** Service tests use the real validator and repository, and mock only the bank. The clock is injected with `TimeProvider`, so expiry rules are tested against a fixed date.
+
+## Core brief vs. beyond it
+
+The brief asks for processing (Authorized, Declined, Rejected), retrieval, the listed validation, tests and documented assumptions. Everything else is extra and could be removed without breaking the brief:
+
+- **Beyond the brief:** the circuit breaker and timeout, telling "safe to retry" (`503`) apart from "outcome unknown" (`502`/`504`), and the per-case problem `type`s. I kept them because a payment gateway that retries blindly or hangs on a slow bank is wrong in ways that matter more than the extra code.
+- **Deliberately left out: idempotency keys.** An early version supported an `Idempotency-Key` header, with replay, mismatch detection and a lock after an unknown outcome. It was the most complex part of the code and the brief doesn't ask for it, so I removed it to keep the solution simple. It's the first thing I'd add for production (see below).
+
+## Assumptions
+
+- **Expiry:** a card is valid until the end of its expiry month, in UTC. Years must have four digits.
+- **Currencies:** only `GBP`, `USD` and `EUR` are supported (the brief allows up to three), uppercase only.
+- **Amount:** a positive `int` in minor units. Zero is rejected.
+- **Card number:** ASCII digits only. `char.IsDigit` would accept other numerals, such as Arabic-Indic digits. No Luhn/Verhoeff/Damm check or other checks that try to validate card numbers, because the brief doesn't ask for one and the simulator's test cards don't need it.
+- **Identifiers:** GUIDs, as the brief suggests.
+- **Storage:** in memory, as the brief allows. Data is lost on restart.
+
+## Not done, and what production would need
+
+- **Merchant AUTH and isolation.** This is the biggest gap: any caller can read any payment.
+- **Idempotency keys**, scoped per merchant and stored durably with an expiry (for example 24 hours), so a merchant can retry safely after a network failure without double charging.
+- **Durable, shared storage.** The current repository is per process.
+- **A reconciliation flow** for unknown outcomes. Today a `502` or `504` gives the merchant no payment id to reconcile with. A potential fix is to store the payment as `Pending` with an id before calling the bank, return that id on a `502`/`504`, and have a job query the bank to settle it.
+- **PCI DSS scope reduction** through tokenization, so the gateway never handles raw card numbers. If necessary to store sensitive data, consider encrypting data at rest and in transit.
+- **Observability:** metrics, distributed tracing, and alerting scenarios e.g. on circuit state.
+- **Rate limiting** and request size limits, concurrency limits etc..
+- **CI/CD** Code Review, static analyzer for security vulnerabilities etc.
+- **Scale** Load tests are missing. Expected amount of users, SLAs.
+- **Several acquiring banks.** Each bank has its own wire format, so these would justify per-bank folders behind `IBankClient`.
